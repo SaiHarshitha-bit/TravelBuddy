@@ -1,0 +1,222 @@
+!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+  <title>TravelBuddy – Find your travel companion</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,300;14..32,400;14..32,500;14..32,600;14..32,700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Inter', sans-serif; background: #f5f9ff; color: #1e2a3e; }
+    :root { --ocean-deep: #0a4b7a; --ocean-light: #2c7cb6; --ocean-mist: #cfe7ff; --sand: #fef7e6; --accent: #1e6f9f; }
+    .container { max-width: 1280px; margin: 0 auto; padding: 0 24px; }
+    header { background: white; box-shadow: 0 2px 12px rgba(0,0,0,0.03); position: sticky; top: 0; z-index: 100; padding: 16px 0; border-bottom: 1px solid #e4ecf5; }
+    .nav-bar { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 20px; }
+    .logo { display: flex; align-items: center; gap: 10px; }
+    .logo-icon { background: linear-gradient(135deg, #0a4b7a, #1e88c9); width: 46px; height: 46px; border-radius: 50%; display: flex; align-items: center; justify-content: center; box-shadow: 0 6px 12px rgba(10,75,122,0.2); }
+    .logo-icon i { font-size: 26px; color: white; }
+    .logo-text h1 { font-size: 1.7rem; font-weight: 700; color: #0a4b7a; letter-spacing: -0.3px; }
+    .logo-text span { font-size: 0.7rem; font-weight: 500; background: #eef4fc; padding: 2px 8px; border-radius: 30px; color: #1e6f9f; }
+    .nav-links { display: flex; gap: 28px; align-items: center; }
+    .nav-links a { text-decoration: none; font-weight: 500; color: #2c3e50; transition: 0.2s; cursor: pointer; }
+    .nav-links a:hover { color: #0a4b7a; }
+    .btn-outline { border: 1.5px solid #0a4b7a; padding: 8px 20px; border-radius: 40px; background: transparent; font-weight: 600; color: #0a4b7a; }
+    .btn-outline:hover { background: #0a4b7a; color: white; }
+    .modal { display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.5); backdrop-filter: blur(4px); }
+    .modal-content { background-color: white; margin: 10% auto; padding: 40px; border-radius: 24px; width: 90%; max-width: 400px; box-shadow: 0 20px 40px rgba(0,0,0,0.2); position: relative; }
+    .close-btn { position: absolute; right: 20px; top: 15px; font-size: 24px; cursor: pointer; color: #5a6e7c; }
+    .modal h2 { color: #0a4b7a; margin-bottom: 24px; text-align: center; }
+    .modal input { width: 100%; padding: 14px; margin-bottom: 16px; border: 1px solid #cfe2f2; border-radius: 12px; font-family: inherit; }
+    .modal .btn-primary { width: 100%; background: #0a4b7a; color: white; border: none; padding: 14px; border-radius: 12px; font-weight: 600; cursor: pointer; }
+    .hero-search { background: linear-gradient(120deg, #cbe6fe, #e3f0ff); border-radius: 32px; margin: 32px 0 40px; padding: 48px 32px; text-align: center; }
+    .hero-search h2 { font-size: 2.4rem; font-weight: 700; color: #0a4b7a; margin-bottom: 12px; }
+    .hero-search p { color: #2c5a7a; margin-bottom: 32px; }
+    .search-card { background: white; border-radius: 60px; padding: 8px 12px; display: inline-flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: center; box-shadow: 0 16px 32px rgba(0,0,0,0.08); max-width: 700px; width: 100%; }
+    .search-card input, .search-card select { padding: 14px 18px; border: none; background: #f8fafc; border-radius: 48px; font-size: 0.95rem; min-width: 180px; outline: none; font-family: inherit; }
+    .search-card button { background: #0a4b7a; border: none; padding: 12px 28px; border-radius: 40px; color: white; font-weight: 600; cursor: pointer; transition: 0.2s; }
+    .search-card button:hover { background: #063a5e; }
+    .section-title { font-size: 1.8rem; font-weight: 700; margin: 48px 0 24px; color: #0e3a5a; }
+    .card-grid { display: flex; flex-wrap: wrap; gap: 28px; justify-content: center; }
+    .buddy-card { background: white; border-radius: 24px; overflow: hidden; width: 280px; box-shadow: 0 8px 20px rgba(0,0,0,0.05); transition: transform 0.2s; border: 1px solid #e1ecf5; }
+    .buddy-card:hover { transform: translateY(-6px); box-shadow: 0 20px 28px -10px rgba(10,75,122,0.15); }
+    .card-img { background: #cfe7ff; height: 160px; display: flex; align-items: center; justify-content: center; font-size: 3rem; color: #0a4b7a; }
+    .card-info { padding: 18px; }
+    .card-info h4 { font-size: 1.2rem; font-weight: 700; margin-bottom: 6px; }
+    .card-info .location { color: #5a6e7c; font-size: 0.85rem; display: flex; align-items: center; gap: 4px; margin-bottom: 12px; }
+    .tag { background: #eef4fc; padding: 4px 10px; border-radius: 20px; font-size: 0.7rem; font-weight: 600; color: #0a4b7a; display: inline-block; margin-right: 6px; }
+    .connect-small { background: #0a4b7a10; border: none; margin-top: 12px; width: 100%; padding: 8px; border-radius: 30px; font-weight: 600; color: #0a4b7a; cursor: pointer; }
+    .contact-bar { background: white; border-radius: 28px; padding: 28px 24px; margin: 48px 0 32px; display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 20px; box-shadow: 0 4px 12px rgba(0,0,0,0.02); border: 1px solid #cbe0f0; }
+    .contact-item { display: flex; align-items: center; gap: 15px; background: #f7fbfe; padding: 10px 22px; border-radius: 60px; }
+    .contact-item i { font-size: 1.6rem; color: #0a4b7a; }
+    .contact-item a { text-decoration: none; font-weight: 600; color: #1e2a3e; font-size: 1.05rem; }
+    footer { text-align: center; padding: 32px 0 28px; border-top: 1px solid #cfe2f2; color: #4a627a; margin-top: 30px; }
+    @media (max-width: 700px) { .search-card { flex-direction: column; background: transparent; box-shadow: none; gap: 12px; } .search-card input, .search-card select { width: 100%; background: white; border: 1px solid #cfe2f2; } .contact-bar { flex-direction: column; align-items: flex-start; } }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="container nav-bar">
+    <div class="logo">
+      <div class="logo-icon"><i class="fas fa-suitcase-rolling"></i></div>
+      <div class="logo-text"><h1>TravelBuddy <span>🧳 companion</span></h1></div>
+    </div>
+    <div class="nav-links">
+      <a onclick="showAuth('login')">Login</a>
+      <a onclick="showAuth('signup')" class="btn-outline">Sign up</a>
+    </div>
+  </div>
+</header>
+
+<main class="container">
+  <div class="hero-search">
+    <h2>Find a travel buddy, <br>anywhere 🌊</h2>
+    <p>Safe, budget‑friendly & inclusive — explore together</p>
+    <div class="search-card">
+      <input type="text" id="searchDest" placeholder="Where to? (e.g. Bali, Manali, Goa)" value="Goa">
+      <input type="date" id="travelDate">
+      <select id="travelStyle">
+        <option value="budget">Budget friendly</option>
+        <option value="mid">Mid range</option>
+        <option value="any">Any style</option>
+      </select>
+      <button id="searchBtn"><i class="fas fa-search"></i> Search buddies</button>
+    </div>
+  </div>
+  <h2 class="section-title"><i class="fas fa-users"></i> Travelers looking for company</h2>
+  <div class="card-grid" id="companionGrid"></div>
+  <div class="contact-bar">
+    <div class="contact-item"><i class="fas fa-phone-alt"></i><a href="tel:+918328554761">+91 83285 54761</a></div>
+    <div class="contact-item"><i class="fas fa-envelope"></i><a href="mailto:saiharshi2626@gmail.com">saiharshi2626@gmail.com</a></div>
+    <div style="font-size:0.85rem; color:#2c7cb6;"><i class="fas fa-shield-alt"></i> 24/7 buddy support</div>
+  </div>
+</main>
+
+<div id="authModal" class="modal">
+  <div class="modal-content">
+    <span class="close-btn" onclick="closeAuth()">&times;</span>
+    <h2 id="modalTitle">Login</h2>
+    <input type="email" id="authEmail" placeholder="Email Address">
+    <input type="password" id="authPassword" placeholder="Password">
+    <div id="signupFields" style="display:none;"><input type="text" placeholder="Full Name"></div>
+    <button class="btn-primary" id="authSubmit">Continue</button>
+    <p style="text-align:center; font-size: 0.8rem; margin-top: 15px; color: #5a6e7c;">Secure SSL login · TravelBuddy Safety</p>
+  </div>
+</div>
+
+<footer><div class="container"><p>🌊 TravelBuddy – Ocean Blue edition · Inclusive for all · Budget travel with companions</p><p style="margin-top: 12px;">📍 Connect · Share costs · Make memories | © 2025 TravelBuddy</p></div></footer>
+
+<script>
+  function showAuth(mode) {
+    const modal = document.getElementById('authModal');
+    const title = document.getElementById('modalTitle');
+    const signupFields = document.getElementById('signupFields');
+    modal.style.display = "block";
+    if(mode === 'signup') { title.innerText = "Create Account"; signupFields.style.display = "block"; } 
+    else { title.innerText = "Welcome Back"; signupFields.style.display = "none"; }
+  }
+  function closeAuth() { document.getElementById('authModal').style.display = "none"; }
+  window.onclick = function(event) { if (event.target == document.getElementById('authModal')) closeAuth(); }
+
+  const buddies = [
+    { name: "Aarav", age: 27, from: "Delhi", destination: "Goa", budget: "budget", vibe: "beach & cafe hopping", imgIcon: "🏄‍♂️" },
+    { name: "Meera", age: 24, from: "Mumbai", destination: "Goa", budget: "budget", vibe: "yoga & night markets", imgIcon: "🧘‍♀️" },
+    { name: "Rohan", age: 30, from: "Bangalore", destination: "Manali", budget: "mid", vibe: "trekking & homestays", imgIcon: "🏔️" },
+    { name: "Sneha", age: 26, from: "Chennai", destination: "Goa", budget: "budget", vibe: "backpacking hostels", imgIcon: "🎒" },
+    { name: "Kabir", age: 29, from: "Pune", destination: "Kerala", budget: "budget", vibe: "houseboat & culture", imgIcon: "⛵" },
+    { name: "Priya", age: 32, from: "Kolkata", destination: "Himachal", budget: "mid", vibe: "solo & group mix", imgIcon: "🏞️" }
+  ];
+
+  function renderBuddies(filterDest = "", filterBudget = "any") {
+    let filtered = buddies;
+    if (filterDest.trim() !== "") filtered = filtered.filter(b => b.destination.toLowerCase().includes(filterDest.toLowerCase()));
+    if (filterBudget !== "any") filtered = filtered.filter(b => b.budget === filterBudget);
+    const grid = document.getElementById("companionGrid");
+    if (filtered.length === 0) {
+      grid.innerHTML = `<div style="width:100%; text-align:center; padding:40px; background:#eef4fc; border-radius:32px;">🤝 No buddies found for "${filterDest}". Be the first to post your trip!</div>`;
+      return;
+    }
+    let html = "";
+    filtered.forEach(b => {
+      html += `<div class="buddy-card">
+          <div class="card-img">${b.imgIcon} <i class="fas fa-user-friends" style="font-size:2rem; margin-left:8px;"></i></div>
+          <div class="card-info">
+            <h4>${b.name}, ${b.age}</h4>
+            <div class="location"><i class="fas fa-map-marker-alt"></i> ${b.destination} · from ${b.from}</div>
+            <div><span class="tag">${b.budget === 'budget' ? '💰 Budget friendly' : '✨ Mid range'}</span> <span class="tag">🎯 ${b.vibe}</span></div>
+            <button class="connect-small" style="background:#2ecc71; color:white;" onclick="sendMessage('${b.name}')"><i class="fas fa-comment"></i> Message Now</button>
+          </div>
+        </div>`;
+    });
+    grid.innerHTML = html;
+  }
+  renderBuddies();
+  document.getElementById('searchBtn').addEventListener('click', () => {
+    const dest = document.getElementById('searchDest').value;
+    const style = document.getElementById('travelStyle').value;
+    renderBuddies(dest, style);
+  });
+</script>
+
+<script>
+  const BASE_URL = 'http://127.0.0.1:5000';
+
+  document.getElementById('authSubmit').onclick = async (e) => {
+    e.preventDefault();
+    const email = document.getElementById('authEmail').value;
+    const password = document.getElementById('authPassword').value;
+    const isSignup = document.getElementById('modalTitle').innerText === "Create Account";
+    const path = isSignup ? '/signup' : '/login';
+
+    try {
+      const response = await fetch(BASE_URL + path, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password })
+      });
+      
+      if (response.ok) {
+        alert("Welcome to TravelBuddy!");
+        location.reload(); 
+      } else {
+        const data = await response.json();
+        alert(data.message);
+      }
+    } catch (error) {
+      // No more "Black Window" alert. We log it to the console instead.
+      console.log("Terminal connection pending...");
+    }
+  };
+
+  async function showRealTravelers() {
+    try {
+      const response = await fetch(BASE_URL + '/users');
+      const realUsers = await response.json();
+      const grid = document.getElementById("companionGrid");
+      
+      realUsers.forEach(user => {
+        grid.innerHTML += `
+          <div class="buddy-card" style="border: 2px solid #0a4b7a;">
+            <div class="card-img">👤</div>
+            <div class="card-info">
+              <h4>Verified Traveler</h4>
+              <div class="location"><i class="fas fa-envelope"></i> ${user.email}</div>
+              <button class="connect-small" style="background:#2ecc71; color:white;" onclick="sendMessage('${user.email}')">
+                <i class="fas fa-comment"></i> Message
+              </button>
+            </div>
+          </div>`;
+      });
+    } catch (err) {
+      console.log("Waiting for database users...");
+    }
+  }
+  showRealTravelers();
+
+  function sendMessage(receiver) {
+    const msg = prompt("Message " + receiver + ":");
+    if (msg) alert("Sent!");
+  }
+</script>
+ </html>
