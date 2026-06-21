@@ -1,4 +1,4 @@
-!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -6,6 +6,8 @@
   <title>TravelBuddy – Find your travel companion</title>
   <link href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,300;14..32,400;14..32,500;14..32,600;14..32,700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+  <!-- Socket.io client library for real-time messaging -->
+  <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { font-family: 'Inter', sans-serif; background: #f5f9ff; color: #1e2a3e; }
@@ -161,62 +163,1463 @@
 
 <script>
   const BASE_URL = 'http://127.0.0.1:5000';
+  let socket = null;
+  let currentChatRecipientId = null;
+  let currentActiveDestinationRoom = null; // Track open group chat room
+  let registeredUsers = []; // List of all database users to lookup IDs by email
 
+  // Login/Signup request handling
   document.getElementById('authSubmit').onclick = async (e) => {
     e.preventDefault();
-    const email = document.getElementById('authEmail').value;
+    const email = document.getElementById('authEmail').value.trim();
     const password = document.getElementById('authPassword').value;
+    const nameInput = document.querySelector('#signupFields input');
+    const username = nameInput ? nameInput.value.trim() : '';
     const isSignup = document.getElementById('modalTitle').innerText === "Create Account";
-    const path = isSignup ? '/signup' : '/login';
+    const url = isSignup ? 'http://127.0.0.1:5000/api/auth/signup' : 'http://127.0.0.1:5000/api/auth/login';
 
     try {
-      const response = await fetch(BASE_URL + path, {
+      const response = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password })
+        body: JSON.stringify(isSignup ? { email, password, username } : { email: email, username: email, password })
       });
       
       if (response.ok) {
+        const data = await response.json();
+        
+        // Store JWT token and user profile elements in localStorage
+        localStorage.setItem("token", data.token);
+        localStorage.setItem("userId", data.user._id);
+        localStorage.setItem("userEmail", data.user.email);
+        localStorage.setItem("isAdmin", data.user.isAdmin ? "true" : "false");
+
         alert("Welcome to TravelBuddy!");
-        location.reload(); 
+        closeAuth();
+        checkLoginState();
       } else {
         const data = await response.json();
-        alert(data.message);
+        alert(data.message || "Authentication failed");
       }
     } catch (error) {
-      // No more "Black Window" alert. We log it to the console instead.
-      console.log("Terminal connection pending...");
+      console.log("Terminal connection pending...", error);
+      alert("Could not connect to the backend server.");
     }
   };
 
+  // Logged in UI state check
+  function checkLoginState() {
+    const token = localStorage.getItem("token");
+    const navLinks = document.querySelector(".nav-links");
+    if (token && navLinks) {
+      const userEmail = localStorage.getItem("userEmail") || "Profile";
+      navLinks.innerHTML = `
+        <span style="font-weight:600; color:#0a4b7a; margin-right:15px;"><i class="fas fa-user-circle"></i> ${userEmail}</span>
+        <a onclick="handleLogout()" class="btn-outline">Logout</a>
+      `;
+      
+      // Initialize Socket connection
+      const userId = localStorage.getItem("userId");
+      initSocketConnection(userId);
+      
+      // Show control deck toggle button
+      document.getElementById('tb-deck-toggle').style.display = 'flex';
+    }
+  }
+
+  function handleLogout() {
+    localStorage.removeItem("token");
+    localStorage.removeItem("userId");
+    localStorage.removeItem("userEmail");
+    localStorage.removeItem("isAdmin");
+    alert("Logged out successfully!");
+    location.reload();
+  }
+
+  // Load and display database users
   async function showRealTravelers() {
     try {
       const response = await fetch(BASE_URL + '/users');
-      const realUsers = await response.json();
-      const grid = document.getElementById("companionGrid");
+      const data = await response.json();
       
-      realUsers.forEach(user => {
-        grid.innerHTML += `
-          <div class="buddy-card" style="border: 2px solid #0a4b7a;">
-            <div class="card-img">👤</div>
-            <div class="card-info">
-              <h4>Verified Traveler</h4>
-              <div class="location"><i class="fas fa-envelope"></i> ${user.email}</div>
-              <button class="connect-small" style="background:#2ecc71; color:white;" onclick="sendMessage('${user.email}')">
-                <i class="fas fa-comment"></i> Message
-              </button>
-            </div>
-          </div>`;
-      });
+      // Safety check: ensure the response is an array before processing
+      if (Array.isArray(data)) {
+        registeredUsers = data;
+        const grid = document.getElementById("companionGrid");
+        
+        registeredUsers.forEach(user => {
+          grid.innerHTML += `
+            <div class="buddy-card" style="border: 2px solid #0a4b7a;">
+              <div class="card-img">👤</div>
+              <div class="card-info">
+                <h4>Verified Traveler</h4>
+                <div class="location"><i class="fas fa-envelope"></i> ${user.email}</div>
+                <button class="connect-small" style="background:#2ecc71; color:white;" onclick="sendMessage('${user.email}')">
+                  <i class="fas fa-comment"></i> Message
+                </button>
+              </div>
+            </div>`;
+        });
+      } else {
+        console.log("Could not load users list: Server returned non-array payload.");
+      }
     } catch (err) {
-      console.log("Waiting for database users...");
+      console.log("Waiting for database users...", err);
     }
   }
-  showRealTravelers();
 
+  // Initialize Socket connection
+  function initSocketConnection(userId) {
+    if (typeof io === 'undefined') {
+      console.error("Socket.io client library not loaded.");
+      return;
+    }
+    
+    socket = io(BASE_URL);
+
+    socket.on("connect", () => {
+      console.log("🟢 Connected to Socket.io Server");
+      socket.emit("register_user", userId);
+    });
+
+    socket.on("receive_direct_message", (messageData) => {
+      if (currentChatRecipientId && messageData.senderId === currentChatRecipientId) {
+        appendMessageToScreen(messageData, false);
+      }
+    });
+
+    socket.on("message_sent_success", (messageData) => {
+      appendMessageToScreen(messageData, true);
+    });
+
+    socket.on("error_message", (errorData) => {
+      console.error("❌ Socket error:", errorData.message);
+    });
+
+    // Destination Group Chat message receiver
+    socket.on("receive_group_message", (data) => {
+      const { destination, message } = data;
+      if (currentActiveDestinationRoom === destination.toLowerCase().trim()) {
+        appendGroupMessageToScreen(message);
+      }
+    });
+  }
+
+  // Dynamically load historical conversation
+  async function openChatWindow(receiverId, receiverEmail) {
+    currentChatRecipientId = receiverId;
+    
+    document.getElementById('tb-chat-title').innerText = `Chat: ${receiverEmail}`;
+    document.getElementById('travelbuddy-chat-widget').style.display = 'flex';
+    
+    const container = document.getElementById('tb-chat-messages');
+    container.innerHTML = ""; // Clear old bubbles
+
+    const token = localStorage.getItem("token");
+    if (!token) {
+      alert("You must be logged in to load chat history.");
+      return;
+    }
+
+    try {
+      const response = await fetch(`${BASE_URL}/api/messages/conversation/${receiverId}`, {
+        method: 'GET',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      
+      if (response.ok) {
+        const messages = await response.json();
+        const currentUserId = localStorage.getItem("userId");
+        
+        messages.forEach(msg => {
+          appendMessageToScreen(msg, msg.senderId === currentUserId);
+        });
+        
+        scrollChatToBottom();
+      }
+    } catch (err) {
+      console.error("Error loading chat history:", err);
+    }
+  }
+
+  // Handle click on card message buttons
   function sendMessage(receiver) {
-    const msg = prompt("Message " + receiver + ":");
-    if (msg) alert("Sent!");
+    const token = localStorage.getItem("token");
+    if (!token) {
+      alert("Please log in to chat with travelers!");
+      showAuth('login');
+      return;
+    }
+
+    // Check if receiver is a registered user
+    const targetUser = registeredUsers.find(u => 
+      u.email === receiver || 
+      u.username === receiver || 
+      (u.profile && u.profile.name === receiver)
+    );
+    if (!targetUser) {
+      alert(`Cannot send real-time DM to mock buddy ${receiver}. Chat is only available for verified users.`);
+      return;
+    }
+
+    openChatWindow(targetUser._id, targetUser.email);
+  }
+
+  // Send message event
+  function handleSendChatMessage() {
+    const input = document.getElementById('tb-chat-input');
+    const messageText = input.value.trim();
+    if (!messageText || !currentChatRecipientId) return;
+
+    const token = localStorage.getItem("token");
+    if (!token) {
+      alert("You must be logged in to send messages.");
+      return;
+    }
+
+    socket.emit("send_direct_message", {
+      token: token,
+      receiverId: currentChatRecipientId,
+      message: messageText
+    });
+
+    input.value = "";
+  }
+
+  function appendMessageToScreen(msg, isSentByMe) {
+    const container = document.getElementById('tb-chat-messages');
+    if (!container) return;
+
+    // Prevent double rendering
+    const existing = document.getElementById(`msg-${msg._id}`);
+    if (existing) return;
+
+    const wrapper = document.createElement('div');
+    wrapper.id = `msg-${msg._id || Date.now()}`;
+    wrapper.className = `tb-msg-wrapper ${isSentByMe ? 'tb-msg-sent' : 'tb-msg-received'}`;
+
+    const bubble = document.createElement('div');
+    bubble.className = 'tb-msg-bubble';
+    bubble.innerText = msg.message;
+
+    wrapper.appendChild(bubble);
+    container.appendChild(wrapper);
+    scrollChatToBottom();
+  }
+
+  function scrollChatToBottom() {
+    const container = document.getElementById('tb-chat-messages');
+    if (container) {
+      container.scrollTop = container.scrollHeight;
+    }
+  }
+
+  // Inject Chat Widget UI Dynamically into the page
+  function injectChatWidget() {
+    // 1. Styles
+    const styleEl = document.createElement('style');
+    styleEl.innerHTML = `
+      .tb-chat-widget {
+        position: fixed;
+        bottom: 20px;
+        right: 20px;
+        width: 350px;
+        height: 450px;
+        background: white;
+        border-radius: 16px;
+        box-shadow: 0 12px 36px rgba(0, 0, 0, 0.15);
+        display: none;
+        flex-direction: column;
+        z-index: 9999;
+        overflow: hidden;
+        border: 1px solid #cfe2f2;
+        font-family: 'Inter', sans-serif;
+      }
+      .tb-chat-header {
+        background: #0a4b7a;
+        color: white;
+        padding: 14px 18px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        font-weight: 600;
+      }
+      .tb-chat-header .close-chat {
+        cursor: pointer;
+        font-size: 22px;
+        line-height: 1;
+      }
+      .tb-chat-messages {
+        flex: 1;
+        padding: 16px;
+        overflow-y: auto;
+        background: #f5f9ff;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      .tb-msg-wrapper {
+        display: flex;
+        width: 100%;
+      }
+      .tb-msg-sent {
+        justify-content: flex-end;
+      }
+      .tb-msg-received {
+        justify-content: flex-start;
+      }
+      .tb-msg-bubble {
+        max-width: 75%;
+        padding: 10px 14px;
+        border-radius: 14px;
+        font-size: 0.88rem;
+        line-height: 1.4;
+        word-break: break-word;
+      }
+      .tb-msg-sent .tb-msg-bubble {
+        background: #0a4b7a;
+        color: white;
+        border-top-right-radius: 4px;
+      }
+      .tb-msg-received .tb-msg-bubble {
+        background: #e4ecf5;
+        color: #1e2a3e;
+        border-top-left-radius: 4px;
+      }
+      .tb-chat-footer {
+        padding: 12px;
+        border-top: 1px solid #cfe2f2;
+        display: flex;
+        gap: 8px;
+        background: white;
+      }
+      .tb-chat-input {
+        flex: 1;
+        padding: 10px 14px;
+        border: 1px solid #cfe2f2;
+        border-radius: 20px;
+        outline: none;
+        font-size: 0.9rem;
+        font-family: inherit;
+      }
+      .tb-chat-send-btn {
+        background: #0a4b7a;
+        border: none;
+        color: white;
+        width: 38px;
+        height: 38px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        transition: 0.2s;
+      }
+      .tb-chat-send-btn:hover {
+        background: #063a5e;
+      }
+    `;
+    document.head.appendChild(styleEl);
+
+    // 2. HTML Markup
+    const widget = document.createElement('div');
+    widget.id = 'travelbuddy-chat-widget';
+    widget.className = 'tb-chat-widget';
+    widget.innerHTML = `
+      <div class="tb-chat-header">
+        <span id="tb-chat-title">Chat</span>
+        <span class="close-chat" id="tb-close-chat">&times;</span>
+      </div>
+      <div class="tb-chat-messages" id="tb-chat-messages"></div>
+      <div class="tb-chat-footer">
+        <input type="text" class="tb-chat-input" id="tb-chat-input" placeholder="Type a message...">
+        <button class="tb-chat-send-btn" id="tb-send-chat-btn"><i class="fas fa-paper-plane"></i></button>
+      </div>
+    `;
+    document.body.appendChild(widget);
+
+    // 3. Event Listeners
+    document.getElementById('tb-close-chat').onclick = () => {
+      document.getElementById('travelbuddy-chat-widget').style.display = 'none';
+      currentChatRecipientId = null;
+    };
+
+    document.getElementById('tb-send-chat-btn').onclick = handleSendChatMessage;
+    document.getElementById('tb-chat-input').onkeypress = (e) => {
+      if (e.key === 'Enter') handleSendChatMessage();
+    };
+  }
+
+  // ==========================================
+  // SAAS CONTROL DECK OVERLAY DRAWER INJECTION
+  // ==========================================
+  
+  function injectSaaSControlDeck() {
+    // 1. Styles
+    const styleEl = document.createElement('style');
+    styleEl.innerHTML = `
+      .tb-deck-btn {
+        position: fixed;
+        bottom: 20px;
+        left: 20px;
+        width: 55px;
+        height: 55px;
+        background: #0a4b7a;
+        color: white;
+        border-radius: 50%;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        font-size: 24px;
+        box-shadow: 0 8px 24px rgba(10,75,122,0.3);
+        cursor: pointer;
+        z-index: 9997;
+        transition: 0.3s;
+      }
+      .tb-deck-btn:hover {
+        transform: scale(1.08) rotate(45deg);
+        background: #063a5e;
+      }
+      .tb-deck-panel {
+        position: fixed;
+        left: 0;
+        top: 0;
+        width: 440px;
+        height: 100%;
+        background: white;
+        box-shadow: 6px 0 32px rgba(0, 0, 0, 0.12);
+        z-index: 9996;
+        display: flex;
+        flex-direction: column;
+        transform: translateX(-100%);
+        transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+        font-family: 'Inter', sans-serif;
+        border-right: 1px solid #e4ecf5;
+      }
+      .tb-deck-panel.open {
+        transform: translateX(0);
+      }
+      .tb-deck-header {
+        background: #0a4b7a;
+        color: white;
+        padding: 18px 24px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+      .tb-deck-header h3 {
+        font-weight: 700;
+        font-size: 1.15rem;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .tb-deck-close {
+        cursor: pointer;
+        font-size: 24px;
+      }
+      .tb-deck-tabs {
+        display: flex;
+        overflow-x: auto;
+        background: #f7fbfe;
+        border-bottom: 1px solid #e4ecf5;
+        scrollbar-width: none;
+      }
+      .tb-deck-tabs::-webkit-scrollbar {
+        display: none;
+      }
+      .tb-deck-tab {
+        padding: 12px 18px;
+        font-size: 0.82rem;
+        font-weight: 600;
+        color: #5a6e7c;
+        cursor: pointer;
+        white-space: nowrap;
+        border-bottom: 3px solid transparent;
+        transition: 0.2s;
+      }
+      .tb-deck-tab.active {
+        color: #0a4b7a;
+        border-bottom-color: #0a4b7a;
+        background: white;
+      }
+      .tb-deck-body {
+        flex: 1;
+        padding: 24px;
+        overflow-y: auto;
+        background: #fafcff;
+      }
+      .tb-form-group {
+        margin-bottom: 16px;
+      }
+      .tb-form-group label {
+        display: block;
+        font-size: 0.8rem;
+        font-weight: 600;
+        color: #4a627a;
+        margin-bottom: 6px;
+      }
+      .tb-form-group input, .tb-form-group select, .tb-form-group textarea {
+        width: 100%;
+        padding: 10px 14px;
+        border: 1px solid #cfe2f2;
+        border-radius: 8px;
+        outline: none;
+        font-family: inherit;
+        font-size: 0.88rem;
+      }
+      .tb-btn-primary {
+        background: #0a4b7a;
+        color: white;
+        border: none;
+        padding: 12px 20px;
+        border-radius: 8px;
+        font-weight: 600;
+        font-size: 0.9rem;
+        cursor: pointer;
+        width: 100%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        transition: 0.2s;
+      }
+      .tb-btn-primary:hover {
+        background: #063a5e;
+      }
+      .tb-match-card, .tb-trip-card, .tb-post-card, .tb-alert-card {
+        background: white;
+        border: 1px solid #e4ecf5;
+        border-radius: 12px;
+        padding: 16px;
+        margin-bottom: 14px;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.01);
+      }
+      .tb-match-score {
+        background: #2ecc71;
+        color: white;
+        padding: 4px 10px;
+        border-radius: 20px;
+        font-size: 0.75rem;
+        font-weight: 700;
+        float: right;
+      }
+      .tb-feed-avatar {
+        width: 38px;
+        height: 38px;
+        border-radius: 50%;
+        object-fit: cover;
+      }
+      .tb-feed-header {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 10px;
+      }
+      .tb-feed-header h5 {
+        font-weight: 700;
+        font-size: 0.88rem;
+      }
+      .tb-feed-time {
+        font-size: 0.7rem;
+        color: #8fa0b0;
+      }
+      .tb-group-chat-container {
+        display: flex;
+        flex-direction: column;
+        height: 340px;
+        border: 1px solid #cfe2f2;
+        border-radius: 12px;
+        overflow: hidden;
+      }
+      .tb-group-chat-messages {
+        flex: 1;
+        padding: 12px;
+        overflow-y: auto;
+        background: #f5f9ff;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .tb-group-msg {
+        max-width: 80%;
+        padding: 8px 12px;
+        border-radius: 10px;
+        font-size: 0.8rem;
+        line-height: 1.4;
+      }
+      .tb-group-msg-sent {
+        align-self: flex-end;
+        background: #0a4b7a;
+        color: white;
+      }
+      .tb-group-msg-received {
+        align-self: flex-start;
+        background: #e4ecf5;
+        color: #1e2a3e;
+      }
+    `;
+    document.head.appendChild(styleEl);
+
+    // 2. HTML Toggles & Deck Body
+    const toggleBtn = document.createElement('div');
+    toggleBtn.id = 'tb-deck-toggle';
+    toggleBtn.className = 'tb-deck-btn';
+    toggleBtn.innerHTML = '<i class="fas fa-sliders-h"></i>';
+    document.body.appendChild(toggleBtn);
+
+    const panel = document.createElement('div');
+    panel.id = 'tb-deck-panel';
+    panel.className = 'tb-deck-panel';
+    
+    // Add conditional admin tab depending on user profile
+    const isAdmin = localStorage.getItem("isAdmin") === "true";
+    
+    panel.innerHTML = `
+      <div class="tb-deck-header">
+        <h3><i class="fas fa-suitcase"></i> TravelBuddy Control Deck</h3>
+        <span class="tb-deck-close" id="tb-deck-close">&times;</span>
+      </div>
+      <div class="tb-deck-tabs" id="tb-deck-tab-bar">
+        <span class="tb-deck-tab active" data-tab="plans">📋 Plans</span>
+        <span class="tb-deck-tab" data-tab="matches">🤝 Matches</span>
+        <span class="tb-deck-tab" data-tab="rooms">💬 Rooms</span>
+        <span class="tb-deck-tab" data-tab="feed">📱 Feed</span>
+        <span class="tb-deck-tab" data-tab="split">💰 Split</span>
+        <span class="tb-deck-tab" data-tab="safety">🛡️ Safety</span>
+        <span class="tb-deck-tab" data-tab="alerts">🔔 Alerts</span>
+        ${isAdmin ? '<span class="tb-deck-tab" data-tab="admin">👑 Admin</span>' : ''}
+      </div>
+      <div class="tb-deck-body" id="tb-deck-body-content"></div>
+    `;
+    document.body.appendChild(panel);
+
+    // 3. Event Listeners for slide drawer
+    toggleBtn.onclick = () => {
+      panel.classList.toggle('open');
+      if (panel.classList.contains('open')) {
+        renderActiveSaaSTab();
+      }
+    };
+    
+    document.getElementById('tb-deck-close').onclick = () => {
+      panel.classList.remove('open');
+    };
+
+    // Tab clicking handlers
+    const tabBar = document.getElementById('tb-deck-tab-bar');
+    tabBar.onclick = (e) => {
+      const tab = e.target.closest('.tb-deck-tab');
+      if (!tab) return;
+
+      tabBar.querySelectorAll('.tb-deck-tab').forEach(t => t.classList.remove('active'));
+      tab.classList.add('active');
+      renderActiveSaaSTab();
+    };
+  }
+
+  // Render content of active tab dynamically
+  function renderActiveSaaSTab() {
+    const activeTab = document.getElementById('tb-deck-tab-bar').querySelector('.tb-deck-tab.active').getAttribute('data-tab');
+    const container = document.getElementById('tb-deck-body-content');
+    
+    if (activeTab === 'plans') loadTravelPlans(container);
+    else if (activeTab === 'matches') loadTravelMatches(container);
+    else if (activeTab === 'rooms') loadTripRooms(container);
+    else if (activeTab === 'feed') loadTravelFeed(container);
+    else if (activeTab === 'split') loadExpenseSplitter(container);
+    else if (activeTab === 'safety') loadSafetyCentre(container);
+    else if (activeTab === 'alerts') loadAlerts(container);
+    else if (activeTab === 'admin') loadAdminTools(container);
+  }
+
+  // ==========================================
+  // TAB CONTROLLERS & DATA RETRIEVAL
+  // ==========================================
+  
+  // 1. PLANS TAB: List companion requests & create posting
+  async function loadTravelPlans(container) {
+    container.innerHTML = `
+      <div style="margin-bottom: 20px; border-bottom: 1px solid #e4ecf5; padding-bottom: 20px;">
+        <h4 style="margin-bottom: 10px; color: #0a4b7a;">Post Travel Request</h4>
+        <form id="tb-plan-form">
+          <div class="tb-form-group">
+            <label>Destination</label>
+            <input type="text" id="tb-plan-dest" placeholder="e.g. Kerala, Manali" required>
+          </div>
+          <div class="tb-form-group">
+            <label>Trip Budget (₹)</label>
+            <input type="number" id="tb-plan-budget" placeholder="e.g. 10000" required>
+          </div>
+          <div class="tb-form-group" style="display: flex; gap: 8px;">
+            <div style="flex:1;">
+              <label>Start Date</label>
+              <input type="date" id="tb-plan-start" required>
+            </div>
+            <div style="flex:1;">
+              <label>End Date</label>
+              <input type="date" id="tb-plan-end" required>
+            </div>
+          </div>
+          <div class="tb-form-group">
+            <label>Gender Preference</label>
+            <select id="tb-plan-gender">
+              <option value="any">Any Gender</option>
+              <option value="male">Male Companions</option>
+              <option value="female">Female Companions</option>
+            </select>
+          </div>
+          <div class="tb-form-group">
+            <label>Interests (comma separated)</label>
+            <input type="text" id="tb-plan-interests" placeholder="e.g. trekking, photography, food">
+          </div>
+          <div class="tb-form-group">
+            <label>Description/Vibe</label>
+            <textarea id="tb-plan-desc" rows="2" placeholder="Describe your plan..."></textarea>
+          </div>
+          <button class="tb-btn-primary" type="submit"><i class="fas fa-paper-plane"></i> Publish Trip Request</button>
+        </form>
+      </div>
+      <div>
+        <h4 style="margin-bottom: 12px; color: #0a4b7a;">Active Trip Requests</h4>
+        <div id="tb-plans-list"><i class="fas fa-spinner fa-spin"></i> Loading...</div>
+      </div>
+    `;
+
+    // Handle Form Submit
+    document.getElementById('tb-plan-form').onsubmit = async (e) => {
+      e.preventDefault();
+      const destination = document.getElementById('tb-plan-dest').value;
+      const budget = document.getElementById('tb-plan-budget').value;
+      const startDate = document.getElementById('tb-plan-start').value;
+      const endDate = document.getElementById('tb-plan-end').value;
+      const genderPreference = document.getElementById('tb-plan-gender').value;
+      const interests = document.getElementById('tb-plan-interests').value.split(',').map(i => i.trim());
+      const description = document.getElementById('tb-plan-desc').value;
+
+      try {
+        const response = await fetch(`${BASE_URL}/api/trips`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${localStorage.getItem('token')}`
+          },
+          body: JSON.stringify({ destination, budget, startDate, endDate, genderPreference, interests, description })
+        });
+
+        if (response.ok) {
+          alert("Trip request posted successfully! We are now matching you with travel buddies.");
+          renderActiveSaaSTab();
+        } else {
+          const err = await response.json();
+          alert(err.error);
+        }
+      } catch (err) {
+        console.error(err);
+      }
+    };
+
+    // Load list
+    try {
+      const response = await fetch(`${BASE_URL}/api/trips`, {
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+      });
+      const trips = await response.json();
+      const listDiv = document.getElementById('tb-plans-list');
+      listDiv.innerHTML = "";
+
+      if (trips.length === 0) {
+        listDiv.innerHTML = "<p style='font-size:0.8rem; color:#8fa0b0;'>No active companion requests posted yet.</p>";
+        return;
+      }
+
+      trips.forEach(trip => {
+        const start = new Date(trip.travelDates.start).toLocaleDateString();
+        const end = new Date(trip.travelDates.end).toLocaleDateString();
+        
+        listDiv.innerHTML += `
+          <div class="tb-trip-card">
+            <h5 style="color:#0a4b7a; font-weight:700;">${trip.destination}</h5>
+            <p style="font-size:0.75rem; color:#5a6e7c; margin-bottom: 6px;">Budget: ₹${trip.budget} · ${start} - ${end}</p>
+            <p style="font-size:0.8rem; margin-bottom: 8px;">"${trip.description}"</p>
+            <p style="font-size:0.7rem; color:#8fa0b0; margin-bottom:8px;">Creator: ${trip.creatorId.email}</p>
+            <button class="connect-small" style="background:#0a4b7a; color:white; width:auto; padding: 6px 12px; font-size:0.75rem;" onclick="joinTripRequest('${trip._id}')">
+              <i class="fas fa-user-plus"></i> Join Request
+            </button>
+          </div>
+        `;
+      });
+    } catch (err) {
+      console.error(err);
+    }
+  }
+
+  window.joinTripRequest = async (tripId) => {
+    try {
+      const response = await fetch(`${BASE_URL}/api/trips/${tripId}/join`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+      });
+      const data = await response.json();
+      alert(data.message || data.error);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  // 2. MATCHES TAB: Displays matching scoring
+  async function loadTravelMatches(container) {
+    container.innerHTML = `
+      <h4 style="margin-bottom: 6px; color:#0a4b7a;">Companion Matching</h4>
+      <p style="font-size: 0.75rem; color: #5a6e7c; margin-bottom: 16px;">We match you automatically with travelers headed to the same destination during your travel windows!</p>
+      <div id="tb-matches-list"><i class="fas fa-spinner fa-spin"></i> Finding matches...</div>
+    `;
+
+    try {
+      const response = await fetch(`${BASE_URL}/api/users/matches/all`, {
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+      });
+      const matches = await response.json();
+      const listDiv = document.getElementById('tb-matches-list');
+      listDiv.innerHTML = "";
+
+      if (matches.length === 0) {
+        listDiv.innerHTML = `
+          <div style="text-align:center; padding: 20px; background:#f7fbfe; border-radius:12px; border:1px dashed #cfe2f2;">
+            <p style="font-size:0.8rem; color:#5a6e7c;">To get matching scores, please create an active <b>Trip Request</b> in the Plans tab first!</p>
+          </div>
+        `;
+        return;
+      }
+
+      matches.forEach(item => {
+        const creatorEmail = item.user.email;
+        const score = item.matchScore;
+        const dest = item.trip.destination;
+        
+        listDiv.innerHTML += `
+          <div class="tb-match-card">
+            <span class="tb-match-score">${score}% Match</span>
+            <h5 style="font-weight:700;">${creatorEmail.split('@')[0]}</h5>
+            <p style="font-size:0.75rem; color:#5a6e7c;">Destination: <b>${dest}</b></p>
+            <p style="font-size:0.75rem; color:#5a6e7c; margin-bottom:8px;">Reputation Score: ⭐ ${item.user.reputationScore || '5.0'}</p>
+            <button class="connect-small" style="background:#2ecc71; color:white; width:auto; padding: 6px 12px; font-size:0.75rem;" onclick="sendMessage('${creatorEmail}')">
+              <i class="fas fa-comment"></i> Chat now
+            </button>
+          </div>
+        `;
+      });
+    } catch (err) {
+      console.error(err);
+      document.getElementById('tb-matches-list').innerHTML = "Could not calculate matching scores.";
+    }
+  }
+
+  // 3. TRIP ROOMS TAB: Destination group chats
+  async function loadTripRooms(container) {
+    container.innerHTML = `
+      <h4 style="margin-bottom: 6px; color:#0a4b7a;">Destination Trip Rooms</h4>
+      <p style="font-size: 0.75rem; color: #5a6e7c; margin-bottom: 16px;">Chat in real-time with other travelers headed to the same location!</p>
+      
+      <div id="tb-rooms-list" style="margin-bottom: 16px;"><i class="fas fa-spinner fa-spin"></i> Loading rooms...</div>
+      
+      <!-- Group Chat Window -->
+      <div id="tb-group-chat-window" style="display:none;">
+        <h5 style="margin-bottom: 8px; color:#0a4b7a; font-weight:700;" id="tb-group-room-title">Kerala Trip Room</h5>
+        <div class="tb-group-chat-container">
+          <div class="tb-group-chat-messages" id="tb-group-chat-messages"></div>
+          <div class="tb-chat-footer" style="padding: 8px;">
+            <input type="text" class="tb-chat-input" id="tb-group-chat-input" placeholder="Say hello to the room...">
+            <button class="tb-chat-send-btn" id="tb-group-send-btn"><i class="fas fa-paper-plane"></i></button>
+          </div>
+        </div>
+      </div>
+    `;
+
+    // Fetch lists
+    try {
+      const response = await fetch(`${BASE_URL}/api/rooms`, {
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+      });
+      const rooms = await response.json();
+      const listDiv = document.getElementById('tb-rooms-list');
+      listDiv.innerHTML = "";
+
+      rooms.forEach(room => {
+        listDiv.innerHTML += `
+          <button class="connect-small" style="background:#0a4b7a10; color:#0a4b7a; width:auto; margin:4px; padding: 6px 12px; font-size:0.75rem;" onclick="openGroupChat('${room.destination}')">
+            🏢 ${room.name}
+          </button>
+        `;
+      });
+    } catch (err) {
+      console.log(err);
+    }
+  }
+
+  window.openGroupChat = async (destination) => {
+    currentActiveDestinationRoom = destination;
+    document.getElementById('tb-group-room-title').innerText = `${destination.toUpperCase()} Group Chat`;
+    document.getElementById('tb-group-chat-window').style.display = 'block';
+
+    const userId = localStorage.getItem("userId");
+    
+    // Join socket channel room
+    socket.emit('join_destination_room', { destination, userId });
+
+    // Fetch room history
+    try {
+      const response = await fetch(`${BASE_URL}/api/rooms/${destination}/history`, {
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+      });
+      const history = await response.json();
+      const container = document.getElementById('tb-group-chat-messages');
+      container.innerHTML = "";
+
+      history.forEach(msg => {
+        appendGroupMessageToScreen(msg);
+      });
+      container.scrollTop = container.scrollHeight;
+
+      // Bind Send button
+      document.getElementById('tb-group-send-btn').onclick = () => sendGroupChatMessage(destination);
+      document.getElementById('tb-group-chat-input').onkeypress = (e) => {
+        if (e.key === 'Enter') sendGroupChatMessage(destination);
+      };
+
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  function sendGroupChatMessage(destination) {
+    const input = document.getElementById('tb-group-chat-input');
+    const message = input.value.trim();
+    if (!message) return;
+
+    socket.emit('send_group_message', {
+      token: localStorage.getItem('token'),
+      destination,
+      message
+    });
+    input.value = "";
+  }
+
+  function appendGroupMessageToScreen(msg) {
+    const container = document.getElementById('tb-group-chat-messages');
+    if (!container) return;
+
+    const currentUserId = localStorage.getItem("userId");
+    const isSentByMe = msg.senderId === currentUserId;
+
+    const bubble = document.createElement('div');
+    bubble.className = `tb-group-msg ${isSentByMe ? 'tb-group-msg-sent' : 'tb-group-msg-received'}`;
+    bubble.style.margin = '4px 0';
+    bubble.style.padding = '8px 12px';
+    bubble.style.maxWidth = '75%';
+    bubble.style.borderRadius = '10px';
+    bubble.style.fontSize = '0.78rem';
+    
+    // Format
+    bubble.innerHTML = `
+      <div style="font-size:0.65rem; font-weight:600; opacity:0.8; margin-bottom:2px;">${isSentByMe ? 'You' : msg.senderEmail.split('@')[0]}</div>
+      <div>${msg.message}</div>
+    `;
+
+    const wrapper = document.createElement('div');
+    wrapper.style.display = 'flex';
+    wrapper.style.justifyContent = isSentByMe ? 'flex-end' : 'flex-start';
+    wrapper.appendChild(bubble);
+
+    container.appendChild(wrapper);
+    container.scrollTop = container.scrollHeight;
+  }
+
+  // 4. SOCIAL TRAVEL FEED TAB
+  async function loadTravelFeed(container) {
+    container.innerHTML = `
+      <div style="margin-bottom: 20px; border-bottom: 1px solid #e4ecf5; padding-bottom: 20px;">
+        <h4 style="margin-bottom: 10px; color:#0a4b7a;">Publish Travel Update</h4>
+        <form id="tb-feed-form">
+          <div class="tb-form-group">
+            <textarea id="tb-feed-text" rows="2" placeholder="Share your travel experiences or stories..." required></textarea>
+          </div>
+          <div class="tb-form-group">
+            <input type="text" id="tb-feed-image" placeholder="Image URL (optional)">
+          </div>
+          <button class="tb-btn-primary" type="submit"><i class="fas fa-camera"></i> Share experience</button>
+        </form>
+      </div>
+      <div>
+        <h4 style="margin-bottom: 12px; color:#0a4b7a;">Social Feed</h4>
+        <div id="tb-feed-posts"><i class="fas fa-spinner fa-spin"></i> Loading feed...</div>
+      </div>
+    `;
+
+    document.getElementById('tb-feed-form').onsubmit = async (e) => {
+      e.preventDefault();
+      const content = document.getElementById('tb-feed-text').value;
+      const mediaUrl = document.getElementById('tb-feed-image').value;
+
+      try {
+        const response = await fetch(`${BASE_URL}/api/feed`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${localStorage.getItem('token')}`
+          },
+          body: JSON.stringify({ content, mediaUrl })
+        });
+        if (response.ok) {
+          alert("Published to Travel Feed!");
+          renderActiveSaaSTab();
+        }
+      } catch (err) {
+        console.error(err);
+      }
+    };
+
+    // Load Posts
+    try {
+      const response = await fetch(`${BASE_URL}/api/feed`, {
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+      });
+      const posts = await response.json();
+      const feedDiv = document.getElementById('tb-feed-posts');
+      feedDiv.innerHTML = "";
+
+      if (posts.length === 0) {
+        feedDiv.innerHTML = "<p style='font-size:0.8rem; color:#8fa0b0;'>No posts available.</p>";
+        return;
+      }
+
+      posts.forEach(post => {
+        const avatar = (post.creatorId && post.creatorId.profile && post.creatorId.profile.avatar) || 'https://i.pravatar.cc/150';
+        const imageMarkup = post.mediaUrl ? `<img src="${post.mediaUrl}" style="width:100%; border-radius:8px; margin-top:8px; max-height:200px; object-fit:cover;">` : '';
+        const likesText = post.likes.includes(localStorage.getItem('userId')) ? 'Unlike' : 'Like';
+
+        feedDiv.innerHTML += `
+          <div class="tb-post-card">
+            <div class="tb-feed-header">
+              <img src="${avatar}" class="tb-feed-avatar">
+              <div>
+                <h5>${post.creatorEmail.split('@')[0]}</h5>
+                <span class="tb-feed-time">${new Date(post.createdAt).toLocaleDateString()}</span>
+              </div>
+            </div>
+            <p style="font-size:0.85rem;">${post.content}</p>
+            ${imageMarkup}
+            <div style="margin-top:10px; display:flex; gap:16px;">
+              <button style="border:none; background:none; font-size:0.75rem; color:#0a4b7a; cursor:pointer;" onclick="likePost('${post._id}')">
+                <i class="fas fa-thumbs-up"></i> ${likesText} (${post.likes.length})
+              </button>
+              <button style="border:none; background:none; font-size:0.75rem; color:#5a6e7c; cursor:pointer;" onclick="focusCommentField('${post._id}')">
+                <i class="fas fa-comment"></i> Comment (${post.comments.length})
+              </button>
+            </div>
+            
+            <!-- Comment Section -->
+            <div style="margin-top:8px; border-top:1px solid #fafcff; padding-top:6px;">
+              <div id="comments-${post._id}" style="max-height:80px; overflow-y:auto; margin-bottom:6px;">
+                ${post.comments.map(c => `<div style="font-size:0.72rem; margin-bottom:2px;"><b>${c.userEmail.split('@')[0]}:</b> ${c.text}</div>`).join('')}
+              </div>
+              <div style="display:flex; gap:4px;">
+                <input type="text" id="comment-input-${post._id}" placeholder="Write comment..." style="font-size:0.75rem; padding:4px 8px; flex:1;">
+                <button style="background:#0a4b7a; border:none; color:white; border-radius:4px; padding:0 8px; cursor:pointer;" onclick="submitComment('${post._id}')">Send</button>
+              </div>
+            </div>
+          </div>
+        `;
+      });
+    } catch (err) {
+      console.log(err);
+    }
+  }
+
+  window.likePost = async (postId) => {
+    try {
+      await fetch(`${BASE_URL}/api/feed/${postId}/like`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+      });
+      renderActiveSaaSTab();
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  window.submitComment = async (postId) => {
+    const input = document.getElementById(`comment-input-${postId}`);
+    const text = input.value.trim();
+    if (!text) return;
+
+    try {
+      const response = await fetch(`${BASE_URL}/api/feed/${postId}/comment`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('token')}`
+        },
+        body: JSON.stringify({ text })
+      });
+      if (response.ok) {
+        renderActiveSaaSTab();
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  // 5. EXPENSE SPLITTER TAB
+  function loadExpenseSplitter(container) {
+    container.innerHTML = `
+      <h4 style="margin-bottom: 6px; color:#0a4b7a;">Expense Splitter</h4>
+      <p style="font-size: 0.75rem; color: #5a6e7c; margin-bottom: 16px;">Instantly calculate trip share splits with your travel buddies.</p>
+      
+      <form id="tb-split-form">
+        <div class="tb-form-group">
+          <label>Hotel/Accommodation Cost (₹)</label>
+          <input type="number" id="tb-split-hotel" value="0">
+        </div>
+        <div class="tb-form-group">
+          <label>Food & Catering Cost (₹)</label>
+          <input type="number" id="tb-split-food" value="0">
+        </div>
+        <div class="tb-form-group">
+          <label>Transport/Fuel Cost (₹)</label>
+          <input type="number" id="tb-split-transport" value="0">
+        </div>
+        <div class="tb-form-group">
+          <label>Total People (Including You)</label>
+          <input type="number" id="tb-split-count" value="2" min="1">
+        </div>
+        <button class="tb-btn-primary" type="submit"><i class="fas fa-calculator"></i> Calculate Split Share</button>
+      </form>
+      
+      <div id="tb-split-results" style="display:none; margin-top:20px; border:1px solid #2ecc71; background:#ebf9f0; border-radius:10px; padding:16px;">
+        <h5 style="font-weight:700; color:#27ae60; margin-bottom:8px;"><i class="fas fa-check-circle"></i> Expense Calculation</h5>
+        <p style="font-size:0.82rem; margin-bottom:4px;">Total Trip Cost: <b>₹<span id="tb-res-total">0</span></b></p>
+        <p style="font-size:0.82rem; margin-bottom:4px;">Companions Share count: <b><span id="tb-res-count">0</span> people</b></p>
+        <p style="font-size:0.9rem; font-weight:700; color:#27ae60;">Individual Cost Per Person: ₹<span id="tb-res-share">0</span></p>
+      </div>
+    `;
+
+    document.getElementById('tb-split-form').onsubmit = async (e) => {
+      e.preventDefault();
+      const hotelCost = document.getElementById('tb-split-hotel').value;
+      const foodCost = document.getElementById('tb-split-food').value;
+      const transportCost = document.getElementById('tb-split-transport').value;
+      const companionsCount = document.getElementById('tb-split-count').value;
+
+      try {
+        const response = await fetch(`${BASE_URL}/api/split/calculate`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${localStorage.getItem('token')}`
+          },
+          body: JSON.stringify({ hotelCost, foodCost, transportCost, companionsCount })
+        });
+        const data = await response.json();
+        
+        document.getElementById('tb-res-total').innerText = data.totalCost;
+        document.getElementById('tb-res-count').innerText = data.companionsCount;
+        document.getElementById('tb-res-share').innerText = data.perPersonShare;
+        document.getElementById('tb-split-results').style.display = 'block';
+
+      } catch (err) {
+        console.error(err);
+      }
+    };
+  }
+
+  // 6. SAFETY CENTRE TAB: SOS alert and blocking
+  function loadSafetyCentre(container) {
+    container.innerHTML = `
+      <div style="margin-bottom: 20px; border-bottom: 1px solid #e4ecf5; padding-bottom: 20px;">
+        <h4 style="margin-bottom: 6px; color:#0a4b7a;">SOS Signal Dispatch</h4>
+        <p style="font-size:0.75rem; color:#5a6e7c; margin-bottom:12px;">Triggering SOS instantly alerts your registered emergency contacts and logs safety flags on database.</p>
+        <button class="tb-btn-primary" style="background:#e74c3c;" onclick="triggerSOSAlert()"><i class="fas fa-exclamation-triangle"></i> TRIGGER EMERGENCY SOS</button>
+      </div>
+      
+      <div style="margin-bottom: 20px; border-bottom: 1px solid #e4ecf5; padding-bottom: 20px;">
+        <h4 style="margin-bottom: 10px; color:#0a4b7a;">Emergency Contact</h4>
+        <form id="tb-emergency-form">
+          <div class="tb-form-group">
+            <label>Contact Name</label>
+            <input type="text" id="tb-em-name" placeholder="e.g. Spouse, Parent" required>
+          </div>
+          <div class="tb-form-group">
+            <label>Phone Number</label>
+            <input type="tel" id="tb-em-phone" placeholder="e.g. +91 98765 43210" required>
+          </div>
+          <button class="tb-btn-primary" type="submit">Update Emergency Details</button>
+        </form>
+      </div>
+      
+      <div>
+        <h4 style="margin-bottom: 10px; color:#0a4b7a;">Block/Report Traveler</h4>
+        <form id="tb-block-form">
+          <div class="tb-form-group">
+            <label>Report/Block Email</label>
+            <input type="email" id="tb-safety-email" placeholder="email@gmail.com" required>
+          </div>
+          <div class="tb-form-group">
+            <label>Reason (for reports)</label>
+            <input type="text" id="tb-safety-reason" placeholder="e.g. Harassment, Fake Account">
+          </div>
+          <div style="display:flex; gap:8px;">
+            <button class="tb-btn-primary" style="background:#f39c12; flex:1;" type="button" onclick="handleSafetyAction('report')">Report Profile</button>
+            <button class="tb-btn-primary" style="background:#7f8c8d; flex:1;" type="button" onclick="handleSafetyAction('block')">Block User</button>
+          </div>
+        </form>
+      </div>
+    `;
+
+    // Handle emergency form submit
+    document.getElementById('tb-emergency-form').onsubmit = async (e) => {
+      e.preventDefault();
+      const name = document.getElementById('tb-em-name').value;
+      const phone = document.getElementById('tb-em-phone').value;
+
+      try {
+        const response = await fetch(`${BASE_URL}/api/safety/emergency`, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${localStorage.getItem('token')}`
+          },
+          body: JSON.stringify({ name, phone })
+        });
+        if (response.ok) alert("Emergency contact details successfully updated!");
+      } catch (err) {
+        console.error(err);
+      }
+    };
+  }
+
+  window.triggerSOSAlert = async () => {
+    if (!confirm("Are you sure you want to trigger SOS? This will immediately alerts safety teams and contact your emergency relative.")) return;
+    try {
+      const response = await fetch(`${BASE_URL}/api/safety/sos`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+      });
+      const data = await response.json();
+      alert(`🚨 SOS DISPATCHED SUCCESS!\nLog: ${data.alertMessage}`);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  window.handleSafetyAction = async (action) => {
+    const email = document.getElementById('tb-safety-email').value;
+    const reason = document.getElementById('tb-safety-reason').value;
+
+    if (!email) {
+      alert("Please enter target email.");
+      return;
+    }
+
+    // Lookup user by email
+    const targetUser = registeredUsers.find(u => u.email === email);
+    if (!targetUser) {
+      alert("Could not locate traveler profile under this email.");
+      return;
+    }
+
+    try {
+      let response;
+      if (action === 'report') {
+        response = await fetch(`${BASE_URL}/api/safety/report`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${localStorage.getItem('token')}`
+          },
+          body: JSON.stringify({ targetUserId: targetUser._id, reason })
+        });
+      } else {
+        response = await fetch(`${BASE_URL}/api/safety/block`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${localStorage.getItem('token')}`
+          },
+          body: JSON.stringify({ targetUserId: targetUser._id })
+        });
+      }
+      const data = await response.json();
+      alert(data.message || data.error);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  // 7. ALERTS TAB: Persistence notification logs
+  async function loadAlerts(container) {
+    container.innerHTML = `
+      <h4 style="margin-bottom: 12px; color:#0a4b7a;">Notification Logs</h4>
+      <div id="tb-alerts-list"><i class="fas fa-spinner fa-spin"></i> Loading alerts...</div>
+    `;
+
+    // We can fetch alerts in a real production system. Here we construct matches matching alerts or dynamic logs.
+    try {
+      const listDiv = document.getElementById('tb-alerts-list');
+      listDiv.innerHTML = "";
+      
+      // Let's search if any matching profiles exist
+      const response = await fetch(`${BASE_URL}/api/users/matches/all`, {
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+      });
+      const matches = await response.json();
+
+      if (matches.length === 0) {
+        listDiv.innerHTML = "<p style='font-size:0.8rem; color:#8fa0b0;'>No recent notifications or matches found.</p>";
+        return;
+      }
+
+      matches.slice(0, 3).forEach(match => {
+        listDiv.innerHTML += `
+          <div class="tb-alert-card" style="border-left: 4px solid #2ecc71;">
+            <h6 style="font-weight:700; color:#27ae60; margin-bottom:4px;"><i class="fas fa-bell"></i> New Match Alert</h6>
+            <p style="font-size:0.78rem;">Companion <b>${match.user.email.split('@')[0]}</b> matches with you for destination <b>${match.trip.destination}</b> with a score of ${match.matchScore}%!</p>
+          </div>
+        `;
+      });
+    } catch (err) {
+      console.log(err);
+    }
+  }
+
+  // 8. ADMIN TOOLS TAB (Only shown for admin accounts)
+  async function loadAdminTools(container) {
+    container.innerHTML = `
+      <h4 style="margin-bottom: 12px; color:#0a4b7a;">👑 Administrative Console</h4>
+      <div style="margin-bottom: 20px;">
+        <h5 style="margin-bottom: 8px; font-weight:700;">Flagged Accounts & Reports</h5>
+        <div id="tb-admin-reports"><i class="fas fa-spinner fa-spin"></i> Checking reports...</div>
+      </div>
+    `;
+
+    try {
+      const response = await fetch(`${BASE_URL}/api/admin/reports`, {
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+      });
+      const flagged = await response.json();
+      const reportsDiv = document.getElementById('tb-admin-reports');
+      reportsDiv.innerHTML = "";
+
+      if (flagged.length === 0) {
+        reportsDiv.innerHTML = "<p style='font-size:0.8rem; color:#8fa0b0;'>No flagged accounts or reports submitted.</p>";
+        return;
+      }
+
+      flagged.forEach(user => {
+        reportsDiv.innerHTML += `
+          <div class="tb-match-card" style="border-color:#e74c3c;">
+            <h5 style="font-weight:700;">${user.email}</h5>
+            <p style="font-size:0.75rem; color:#c0392b;">Flagged: ${user.reportedBy.length} report(s)</p>
+            <div style="font-size:0.72rem; margin-bottom:8px;">
+              ${user.reportedBy.map(r => `- ${r.reason} (by ${r.reporterId ? r.reporterId.email : 'Unknown'})`).join('<br>')}
+            </div>
+            <div style="display:flex; gap:6px;">
+              <button class="connect-small" style="background:#e74c3c; color:white; width:auto; padding:4px 8px; font-size:0.7rem;" onclick="suspendUserAccount('${user._id}')">Suspend Account</button>
+              <button class="connect-small" style="background:#2ecc71; color:white; width:auto; padding:4px 8px; font-size:0.7rem;" onclick="grantVerificationBadges('${user._id}')">Grant Verified Badge</button>
+            </div>
+          </div>
+        `;
+      });
+
+    } catch (err) {
+      console.error(err);
+    }
+  }
+
+  window.suspendUserAccount = async (userId) => {
+    if (!confirm("Are you sure you want to suspend this user account permanently?")) return;
+    try {
+      const response = await fetch(`${BASE_URL}/api/admin/users/${userId}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+      });
+      if (response.ok) {
+        alert("Account suspended!");
+        renderActiveSaaSTab();
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  window.grantVerificationBadges = async (userId) => {
+    try {
+      const response = await fetch(`${BASE_URL}/api/admin/verify/${userId}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('token')}`
+        },
+        body: JSON.stringify({ badgeType: 'isVerified', status: true })
+      });
+      if (response.ok) {
+        alert("Verified badge granted!");
+        renderActiveSaaSTab();
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  // Kickstart page lifecycle
+  injectChatWidget();
+  injectSaaSControlDeck();
+  checkLoginState();
+  showRealTravelers();
+</script>
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+<script>
+  // 1. CACHE EVICTION: Only clear if the session cache is stale or incomplete on page load
+  const token = localStorage.getItem("token");
+  const userId = localStorage.getItem("userId");
+  if (token && !userId) {
+    localStorage.clear();
+  }
+
+  // 2. REWIRING THE FORMS
+  const authBtn = document.getElementById('authSubmit');
+  if (authBtn) {
+    authBtn.onclick = async (e) => {
+      e.preventDefault();
+      const email = document.getElementById('authEmail').value.trim();
+      const password = document.getElementById('authPassword').value;
+      const nameInput = document.querySelector('#signupFields input');
+      const username = nameInput ? nameInput.value.trim() : '';
+      const isSignup = document.getElementById('modalTitle').innerText === "Create Account";
+      const url = isSignup ? 'http://127.0.0.1:5000/api/auth/signup' : 'http://127.0.0.1:5000/api/auth/login';
+      try {
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(isSignup ? { email, password, username } : { email: email, username: email, password })
+        });
+        const data = await response.json();
+        if (response.ok && data.success) {
+          localStorage.setItem('token', data.token);
+          localStorage.setItem('userId', data.user._id);
+          localStorage.setItem('userEmail', data.user.email);
+          alert('Welcome to TravelBuddy!');
+          closeAuth();
+          checkLoginState();
+        } else {
+          alert(data.message || 'Auth failed');
+        }
+      } catch (err) {
+        console.error(err);
+        alert('Authentication request failed');
+      }
+    };
   }
 </script>
- </html>
+</body>
+</html>
