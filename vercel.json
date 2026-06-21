@@ -1,0 +1,8 @@
+copy this paste this exact corrected block into the code box instead:
+
+'''json
+{
+ "rewrites": [
+    { "source": "/(.*)", "destination": "/chipsss.html"}
+  ]
+}
