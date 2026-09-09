@@ -63,7 +63,9 @@ app.post('/api/auth/signup', async (req, res) => {
             email, 
             username: username || email,
             password: hashedPassword,
-            isAdmin: false
+            isAdmin: false,
+            avatar: req.body.avatar || "/images/default-avatar.png",
+            locationImage: req.body.locationImage || "/image/default-location.jpg"
         });
         
         await newUser.save();
