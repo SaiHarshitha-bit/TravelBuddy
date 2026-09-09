@@ -7,7 +7,7 @@ const jwt = require('jsonwebtoken');
 const app = express();
 app.use(cors());
 app.use(express.json());
-app.use(express.static(__dirname));
+app.use(express.static(__dirname + '/../public'));
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your_secret_key_here';
 
