@@ -124,7 +124,9 @@ app.post('/api/auth/login', async (req, res) => {
                 _id: user._id,
                 email: user.email,
                 username: user.username,
-                isAdmin: user.isAdmin
+                isAdmin: user.isAdmin,
+                avatar: user.avatar,
+                locationImage: user.locationImage
             }
         });
     } catch (err) {
