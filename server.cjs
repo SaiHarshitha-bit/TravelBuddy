@@ -21,7 +21,10 @@ const userSchema = new mongoose.Schema({
     email: { type: String, required: true, unique: true },
     username: { type: String },
     password: { type: String, required: true },
-    isAdmin: { type: Boolean, default: false }
+    isAdmin: { type: Boolean, default: false },
+    avatar: { type: String, default: "/images/default-avatar.png" 
+            },
+    locationImage: { type: String, default: "/images/default-location.jpg" }
 });
 
 const User = mongoose.model('User', userSchema);
