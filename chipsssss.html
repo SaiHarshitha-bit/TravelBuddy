@@ -68,6 +68,7 @@
   <input type="password" id="password" placeholder="Password" required>
   <button type="submit">Login</button>
 </form>
+<div id="cards"></div>
 
 <!-- Script for login -->
 <script>
@@ -83,6 +84,18 @@
         body: JSON.stringify({ email, password })
       });
       const data = await res.json();
+
+      if (data.user) {
+        const user = data.user;
+        document.getElementById("cards").innerHTML = '
+          <div class="card">
+           <img src="${user.locationImage}" alt="Trip Location" class="cards-img">
+           <img src="${user.avatar}" alt="User Avatar" class="avatar">
+           <h3>${user.username}</h3>
+           <p> verified Traveller</p>
+          </div>
+        ';
+      }
       alert(data.message);
     } catch (err) {
       alert('Login failed');
