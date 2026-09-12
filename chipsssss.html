@@ -57,6 +57,50 @@
   </style>
 </head>
 <body>
+  <body>
+  <!-- Keep your existing header, navbar, or styles -->
+
+  <!-- Add this login form -->
+  <form id="loginForm">
+    <input type="email" id="email" placeholder="Email" required>
+    <input type="password" id="password" placeholder="Password" required>
+    <button type="submit">Login</button>
+  </form>
+
+  <!-- Container to show user info -->
+  <div id="userCard"></div>
+
+  <!-- Script goes at the bottom of body -->
+  <script>
+    document.getElementById('loginForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const email = document.getElementById('email').value;
+      const password = document.getElementById('password').value;
+
+      try {
+        const res = await fetch('http://127.0.0.1:5000/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, password })
+        });
+        const data = await res.json();
+
+        if (res.ok) {
+          document.getElementById("userCard").innerHTML = `
+            <h2>${data.user.username}</h2>
+            <img src="${data.user.avatar}" alt="Avatar" />
+            <img src="${data.user.locationImage}" alt="Location" />
+          `;
+        } else {
+          alert(data.message);
+        }
+      } catch (err) {
+        alert("Login failed");
+      }
+    });
+  </script>
+</body>
+
 <!-- Verified Traveller section -->
 <h2>Verified Traveller</h2>
 <p>Welcome to TravelBuddy!</p>
@@ -68,7 +112,7 @@
   <input type="password" id="password" placeholder="Password" required>
   <button type="submit">Login</button>
 </form>
-<div id="cards"></div>
+<div id="Usercards"></div>
 
 <!-- Script for login -->
 <script>
