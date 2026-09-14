@@ -11,11 +11,13 @@ app.use(express.static(__dirname + '/../public'));
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your_secret_key_here';
 
-// 1. Connect to Database
-mongoose.connect('mongodb://127.0.0.1:27017/travelBuddyDB')
-    .then(() => console.log("✅ Success: Database Connected"))
-    .catch(err => console.log("❌ Database Error:", err));
-
+// 1. Connect to Database (Atlas)
+mongoose.connect('mongodb+srv://saiharshi2626_db_user:<db_password>@cluster0.rz5hcmb.mongodb.net/travelBuddyDB?retryWrites=true&w=majority', {
+    useNewUrlParser: true,
+    useUnifiedTopology: true
+})
+.then(() => console.log("✅ Success: Connected to Atlas"))
+.catch(err => console.log("❌ Database Error:", err));
 // 2. User Schema
 const userSchema = new mongoose.Schema({
     email: { type: String, required: true, unique: true },
