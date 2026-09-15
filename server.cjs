@@ -75,10 +75,9 @@ app.post('/api/auth/signup', async (req, res) => {
         // Generate JWT token
         const token = jwt.sign(
             { userId: newUser._id, email: newUser.email },
-            JWT_SECRET,
-            { expiresIn: '7d' }
+            "yourSecretKey",
+            { expiresIn: "1h" }
         );
-
         res.status(201).json({ 
             message: "Account created successfully",
             token,
