@@ -1,1 +1,16 @@
+{
+  "name": "travelbuddy-backend",
+  "version": "1.0.0",
+  "description": "TravelBuddy backend server",
+  "main": "server.cjs",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.cjs"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.19.2",
+    "mongoose": "^8.0.0"
+  }
+}
 
